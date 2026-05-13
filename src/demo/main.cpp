@@ -34,8 +34,17 @@ private:
 
   vk::raii::Context  context;
   vk::raii::Instance instance = nullptr;
+  vk::raii::DebugUtilsMessengerEXT debug_messenger = nullptr;
 
-  void init() {
+  static VKAPI_ATTR vk::Bool32 VKAPI_CALL debug_callback(vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
+                                                         vk::DebugUtilsMessageTypeFlagsEXT type,
+                                                         const vk::DebugUtilsMessengerCallbackDataEXT *data,
+                                                         void *) {
+    std::cerr << "Validation layer " << vk::to_string(severity) << ' ' << vk::to_string(type) << ' ' << data->pMessage << '\n';
+    return vk::False;
+  }
+
+  void create_vulkan_instance() {
     glfwInit();
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -68,6 +77,9 @@ private:
     std::uint32_t glfw_num_exts;
     const char **glfw_exts = glfwGetRequiredInstanceExtensions(&glfw_num_exts);
     std::vector<const char *> exts = std::vector(glfw_exts, glfw_exts + glfw_num_exts);
+    if (enable_validation_layers) {
+      exts.push_back(vk::EXTDebugUtilsExtensionName);
+    }
     std::vector<vk::ExtensionProperties> ext_props = context.enumerateInstanceExtensionProperties();
     std::vector<const char*>::iterator unsupported_ext = std::ranges::find_if(exts, [&ext_props](const char *ext) -> bool {
       return std::ranges::none_of(ext_props, [ext](const vk::ExtensionProperties& ext_prop) -> bool {
@@ -78,7 +90,7 @@ private:
       throw std::runtime_error("Requied extension not supported: " + std::string(*unsupported_ext));
     }
 
-    vk::InstanceCreateInfo create_info = {
+    vk::InstanceCreateInfo instance_create_info = {
       .pApplicationInfo        = &app_info,
       .enabledLayerCount       = static_cast<std::uint32_t>(layers.size()),
       .ppEnabledLayerNames     = layers.data(),
@@ -86,7 +98,29 @@ private:
       .ppEnabledExtensionNames = exts.data()
     };
 
-    instance = vk::raii::Instance(context, create_info);
+    instance = vk::raii::Instance(context, instance_create_info);
+  }
+
+  void setup_vulkan_debug_messenger() {
+    if (!enable_validation_layers) return;
+    vk::DebugUtilsMessageSeverityFlagsEXT message_severities = vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose
+                                                             | vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo
+                                                             | vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning
+                                                             | vk::DebugUtilsMessageSeverityFlagBitsEXT::eError;
+    vk::DebugUtilsMessageTypeFlagsEXT message_types = vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral
+                                                    | vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation
+                                                    | vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance;
+    vk::DebugUtilsMessengerCreateInfoEXT messenger_create_info = {
+      .messageSeverity = message_severities,
+      .messageType = message_types,
+      .pfnUserCallback = &debug_callback
+    };
+    debug_messenger = instance.createDebugUtilsMessengerEXT(messenger_create_info);
+  }
+
+  void init() {
+    create_vulkan_instance();
+    setup_vulkan_debug_messenger();
   }
 
   void cleanup() {
@@ -101,7 +135,7 @@ int main() {
     Demo demo;
     demo.run();
   } catch (const std::exception& e) {
-    std::cerr << e.what() << '\n';
+    std::cerr << "FATAL: " << e.what() << '\n';
     return 1;
   }
   return 0;
