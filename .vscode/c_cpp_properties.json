@@ -1,0 +1,15 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**"
+            ],
+            "compilerPath": "/usr/bin/g++",
+            "defines": [
+                "VULKAN_HPP_NO_STRUCT_CONSTRUCTORS"
+            ]
+        }
+    ],
+    "version": 4
+}
