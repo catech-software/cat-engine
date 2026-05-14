@@ -2,12 +2,14 @@
 #include <array>
 #include <cstdint>
 #include <exception>
-#include <iostream>
-#include <string>
+#include <format>
+#include <utility>
 #include <vector>
 
 #include <vulkan/vulkan_raii.hpp>
 #include <GLFW/glfw3.h>
+
+#include "demo/log.h"
 
 constexpr int width  = 800;
 constexpr int height = 600;
@@ -40,7 +42,24 @@ private:
                                                          vk::DebugUtilsMessageTypeFlagsEXT type,
                                                          const vk::DebugUtilsMessengerCallbackDataEXT *data,
                                                          void *) {
-    std::cerr << "Validation layer " << vk::to_string(severity) << ' ' << vk::to_string(type) << ' ' << data->pMessage << '\n';
+    Severity log_severity;
+    switch (severity) {
+    case vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose:
+      log_severity = Severity::DEBUG;
+      break;
+    case vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo:
+      log_severity = Severity::INFO;
+      break;
+    case vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning:
+      log_severity = Severity::WARN;
+      break;
+    case vk::DebugUtilsMessageSeverityFlagBitsEXT::eError:
+      log_severity = Severity::ERROR;
+      break;
+    default:
+      std::unreachable();
+    }
+    log(log_severity, std::format("{} {}", vk::to_string(type), data->pMessage));
     return vk::False;
   }
 
@@ -71,7 +90,7 @@ private:
       });
     });
     if (unsupported_layer != layers.end()) {
-      throw std::runtime_error("Required layer not supported: " + std::string(*unsupported_layer));
+      throw std::runtime_error(std::format("Required layer not supported: {}", *unsupported_layer));
     }
 
     std::uint32_t glfw_num_exts;
@@ -87,7 +106,7 @@ private:
       });
     });
     if (unsupported_ext != exts.end()) {
-      throw std::runtime_error("Requied extension not supported: " + std::string(*unsupported_ext));
+      throw std::runtime_error(std::format("Requied extension not supported: {}", *unsupported_ext));
     }
 
     vk::InstanceCreateInfo instance_create_info = {
@@ -135,7 +154,7 @@ int main() {
     Demo demo;
     demo.run();
   } catch (const std::exception& e) {
-    std::cerr << "FATAL: " << e.what() << '\n';
+    log(Severity::FATAL, e.what());
     return 1;
   }
   return 0;

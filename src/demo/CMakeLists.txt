@@ -1,6 +1,6 @@
-add_executable(cat-engine-demo main.cpp)
+add_executable(cat-engine-demo main.cpp log.cpp)
 target_link_libraries(cat-engine-demo Vulkan::Vulkan glfw glm::glm)
-
+target_include_directories(cat-engine-demo PRIVATE "${PROJECT_SOURCE_DIR}/src")
 target_compile_definitions(cat-engine-demo PRIVATE
   "$<$<NOT:$<CONFIG:Debug>>:NDEBUG>"
   "VULKAN_HPP_NO_STRUCT_CONSTRUCTORS"
