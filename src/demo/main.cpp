@@ -14,6 +14,8 @@
 constexpr int width  = 800;
 constexpr int height = 600;
 
+constexpr Severity log_level = Severity::WARN;
+
 // validation layers are only enabled by default on debug builds
 #ifdef NDEBUG
 constexpr bool enable_validation_layers = false;
@@ -34,9 +36,10 @@ public:
 private:
   GLFWwindow* window;
 
-  vk::raii::Context  context;
-  vk::raii::Instance instance = nullptr;
+  vk::raii::Context                context;
+  vk::raii::Instance               instance        = nullptr;
   vk::raii::DebugUtilsMessengerEXT debug_messenger = nullptr;
+  vk::raii::PhysicalDevice         physical_device = nullptr;
 
   static VKAPI_ATTR vk::Bool32 VKAPI_CALL debug_callback(vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
                                                          vk::DebugUtilsMessageTypeFlagsEXT type,
@@ -59,18 +62,11 @@ private:
     default:
       std::unreachable();
     }
-    log(log_severity, std::format("{} {}", vk::to_string(type), data->pMessage));
+    log(log_severity, std::format("Vulkan validation layers: {} {}", vk::to_string(type), data->pMessage));
     return vk::False;
   }
 
   void create_vulkan_instance() {
-    glfwInit();
-
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-
-    window = glfwCreateWindow(width, height, "CAT Engine Demo", nullptr, nullptr);
-
     constexpr vk::ApplicationInfo app_info = {
       .pApplicationName   = "CAT Engine Demo",
       .applicationVersion = VK_MAKE_VERSION(0, 0, 0),
@@ -89,9 +85,8 @@ private:
         return std::strcmp(layer, layer_prop.layerName) == 0;
       });
     });
-    if (unsupported_layer != layers.end()) {
+    if (unsupported_layer != layers.end())
       throw std::runtime_error(std::format("Required layer not supported: {}", *unsupported_layer));
-    }
 
     std::uint32_t glfw_num_exts;
     const char **glfw_exts = glfwGetRequiredInstanceExtensions(&glfw_num_exts);
@@ -105,11 +100,10 @@ private:
         return std::strcmp(ext, ext_prop.extensionName);
       });
     });
-    if (unsupported_ext != exts.end()) {
+    if (unsupported_ext != exts.end())
       throw std::runtime_error(std::format("Requied extension not supported: {}", *unsupported_ext));
-    }
 
-    vk::InstanceCreateInfo instance_create_info = {
+    vk::InstanceCreateInfo create_info = {
       .pApplicationInfo        = &app_info,
       .enabledLayerCount       = static_cast<std::uint32_t>(layers.size()),
       .ppEnabledLayerNames     = layers.data(),
@@ -117,29 +111,84 @@ private:
       .ppEnabledExtensionNames = exts.data()
     };
 
-    instance = vk::raii::Instance(context, instance_create_info);
+    if (enable_validation_layers) {
+      vk::DebugUtilsMessageSeverityFlagsEXT severities;
+      switch (log_level) {
+      case Severity::TRACE:
+      case Severity::DEBUG:
+        severities |= vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose;
+        [[fallthrough]];
+      case Severity::INFO:
+        severities |= vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo;
+        [[fallthrough]];
+      case Severity::WARN:
+        severities |= vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning;
+        [[fallthrough]];
+      case Severity::ERROR:
+        severities |= vk::DebugUtilsMessageSeverityFlagBitsEXT::eError;
+        [[fallthrough]];
+      case Severity::FATAL:
+        break;
+      }
+      vk::DebugUtilsMessageTypeFlagsEXT types
+        = vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral
+        | vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation
+        | vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance;
+      vk::StructureChain<vk::InstanceCreateInfo, vk::DebugUtilsMessengerCreateInfoEXT> create_info_chain = {
+        create_info,
+        {
+          .messageSeverity = severities,
+          .messageType = types,
+          .pfnUserCallback = &debug_callback
+        }
+      };
+      instance = vk::raii::Instance(context, create_info_chain.get<vk::InstanceCreateInfo>());
+      debug_messenger = instance.createDebugUtilsMessengerEXT(create_info_chain.get<vk::DebugUtilsMessengerCreateInfoEXT>());
+    } else {
+      instance = vk::raii::Instance(context, create_info);
+    } 
   }
 
-  void setup_vulkan_debug_messenger() {
-    if (!enable_validation_layers) return;
-    vk::DebugUtilsMessageSeverityFlagsEXT message_severities = vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose
-                                                             | vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo
-                                                             | vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning
-                                                             | vk::DebugUtilsMessageSeverityFlagBitsEXT::eError;
-    vk::DebugUtilsMessageTypeFlagsEXT message_types = vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral
-                                                    | vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation
-                                                    | vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance;
-    vk::DebugUtilsMessengerCreateInfoEXT messenger_create_info = {
-      .messageSeverity = message_severities,
-      .messageType = message_types,
-      .pfnUserCallback = &debug_callback
+  void select_physical_device() {
+    std::vector<const char *> exts = {
+      vk::KHRSwapchainExtensionName
     };
-    debug_messenger = instance.createDebugUtilsMessengerEXT(messenger_create_info);
+    std::vector<vk::raii::PhysicalDevice> physical_devices = instance.enumeratePhysicalDevices();
+    std::vector<vk::raii::PhysicalDevice>::iterator first_device
+      = std::ranges::find_if(physical_devices, [&exts](const vk::raii::PhysicalDevice& device) -> bool {
+        if (device.getProperties().apiVersion < vk::ApiVersion13) return false;
+        if (std::ranges::none_of(device.getQueueFamilyProperties(), [](const vk::QueueFamilyProperties& qfp) -> bool {
+          return static_cast<bool>(qfp.queueFlags & vk::QueueFlagBits::eGraphics);
+        })) return false;
+        std::vector<vk::ExtensionProperties> ext_props = device.enumerateDeviceExtensionProperties();
+        if (!std::ranges::all_of(exts, [&ext_props](const char *ext) -> bool {
+          return std::ranges::any_of(ext_props, [ext](const vk::ExtensionProperties& ext_prop) -> bool {
+            return std::strcmp(ext, ext_prop.extensionName) == 0;
+          });
+        })) return false;
+        vk::StructureChain<vk::PhysicalDeviceFeatures2,
+                           vk::PhysicalDeviceVulkan13Features,
+                           vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> features
+          = device.getFeatures2<vk::PhysicalDeviceFeatures2,
+                                vk::PhysicalDeviceVulkan13Features,
+                                vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+        return features.get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering
+            && features.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState;
+      });
+    if (first_device == physical_devices.end()) throw std::runtime_error("Failed to find a device with Vulkan support");
+    physical_device = *first_device;
   }
 
   void init() {
+    glfwInit();
+
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+
+    window = glfwCreateWindow(width, height, "CAT Engine Demo", nullptr, nullptr);
+
     create_vulkan_instance();
-    setup_vulkan_debug_messenger();
+    select_physical_device();
   }
 
   void cleanup() {
