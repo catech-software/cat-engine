@@ -4,6 +4,7 @@ target_include_directories(cat-engine-demo PRIVATE "${PROJECT_SOURCE_DIR}/src")
 target_compile_definitions(cat-engine-demo PRIVATE
   "$<$<NOT:$<CONFIG:Debug>>:NDEBUG>"
   "VULKAN_HPP_NO_STRUCT_CONSTRUCTORS"
+  "GLFW_INCLUDE_VULKAN"
 )
 target_compile_options(cat-engine-demo PRIVATE
   "-Wall" "-Wextra" "-Wpedantic"
