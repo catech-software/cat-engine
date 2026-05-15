@@ -6,6 +6,7 @@
 #include <string_view>
 
 void log(Severity severity, std::string_view message) {
+  if (severity < log_level) return;
   std::string severity_str;
   switch (severity) {
   case Severity::TRACE:

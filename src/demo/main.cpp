@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <exception>
 #include <format>
+#include <limits>
 #include <ranges>
 #include <tuple>
 #include <utility>
@@ -16,8 +17,6 @@
 
 constexpr int width  = 800;
 constexpr int height = 600;
-
-constexpr Severity log_level = Severity::WARN;
 
 static std::vector<const char *> layers    = {};
 static std::vector<const char *> inst_exts = {};
@@ -46,12 +45,16 @@ private:
   GLFWwindow* window;
 
   vk::raii::Context                context;
-  vk::raii::Instance               instance        = nullptr;
-  vk::raii::DebugUtilsMessengerEXT debug_messenger = nullptr;
-  vk::raii::SurfaceKHR             surface         = nullptr;
-  vk::raii::PhysicalDevice         physical_device = nullptr;
-  vk::raii::Device                 device          = nullptr;
-  vk::raii::Queue                  queue           = nullptr;
+  vk::raii::Instance               instance         = nullptr;
+  vk::raii::DebugUtilsMessengerEXT debug_messenger  = nullptr;
+  vk::raii::SurfaceKHR             surface          = nullptr;
+  vk::raii::PhysicalDevice         physical_device  = nullptr;
+  vk::raii::Device                 device           = nullptr;
+  vk::raii::Queue                  queue            = nullptr;
+  vk::raii::SwapchainKHR           swapchain        = nullptr;
+  std::vector<vk::Image>           swapchain_images;
+  vk::SurfaceFormatKHR             swapchain_format;
+  vk::Extent2D                     swapchain_extent;
 
   static VKAPI_ATTR vk::Bool32 VKAPI_CALL debug_callback(vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
                                                          vk::DebugUtilsMessageTypeFlagsEXT type,
@@ -199,14 +202,15 @@ private:
 
   void create_logical_device() {
     std::vector<vk::QueueFamilyProperties> queue_family_props = physical_device.getQueueFamilyProperties();
-    uint32_t queue_family_index = UINT32_MAX;
+    uint32_t queue_family_index = std::numeric_limits<std::uint32_t>::max();
     for (auto [ qfp_index, qfp ] : queue_family_props | std::views::enumerate) {
       if (qfp.queueFlags & vk::QueueFlagBits::eGraphics && physical_device.getSurfaceSupportKHR(qfp_index, *surface)) {
         queue_family_index = qfp_index;
         break;
       }
     }
-    assert(queue_family_index != UINT32_MAX && "Queue family doesn't support graphics even though it should");
+    assert(queue_family_index != std::numeric_limits<std::uint32_t>::max()
+        && "Queue family doesn't support graphics even though it should");
     float queue_priority = 0.5f;
     vk::DeviceQueueCreateInfo queue_create_info = {
       .queueFamilyIndex = queue_family_index,
@@ -233,6 +237,58 @@ private:
     queue  = vk::raii::Queue(device, queue_family_index, 0);
   }
 
+  void create_swapchain() {
+    std::vector<vk::SurfaceFormatKHR> formats = physical_device.getSurfaceFormatsKHR(*surface);
+    assert(!formats.empty() && "No surface formats supported");
+    decltype(formats)::iterator preferred_format = std::ranges::find_if(formats, [](const vk::SurfaceFormatKHR& format) -> bool {
+      return format.format == vk::Format::eB8G8R8A8Srgb && format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear;
+    });
+    swapchain_format = preferred_format != formats.end() ? *preferred_format : formats[0];
+
+    std::vector<vk::PresentModeKHR> present_modes = physical_device.getSurfacePresentModesKHR(*surface);
+    assert(std::ranges::any_of(present_modes, [](vk::PresentModeKHR present_mode) -> bool {
+      return present_mode == vk::PresentModeKHR::eFifo;
+    }) && "FIFO present mode isn't support even though it should be");
+    vk::PresentModeKHR present_mode = std::ranges::any_of(present_modes, [](vk::PresentModeKHR present_mode) -> bool {
+      return present_mode == vk::PresentModeKHR::eMailbox;
+    }) ? vk::PresentModeKHR::eMailbox : vk::PresentModeKHR::eFifo;
+
+    vk::SurfaceCapabilitiesKHR capabilities = physical_device.getSurfaceCapabilitiesKHR(*surface);
+    if (capabilities.currentExtent.width != std::numeric_limits<std::uint32_t>::max()
+     || capabilities.currentExtent.height != std::numeric_limits<std::uint32_t>::max()) {
+      swapchain_extent = capabilities.currentExtent;
+    } else {
+      int width, height;
+      glfwGetFramebufferSize(window, &width, &height);
+      swapchain_extent = vk::Extent2D{
+        .width  = std::clamp<uint32_t>(width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
+        .height = std::clamp<uint32_t>(height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height)
+      };
+    }
+
+    // prefer triple buffering
+    std::uint32_t min_image_count = capabilities.maxImageCount == 0
+                                  ? std::max(3u, capabilities.minImageCount)
+                                  : std::clamp(3u, capabilities.minImageCount, capabilities.maxImageCount);
+
+    vk::SwapchainCreateInfoKHR create_info = {
+      .surface          = *surface,
+      .minImageCount    = min_image_count,
+      .imageFormat      = swapchain_format.format,
+      .imageColorSpace  = swapchain_format.colorSpace,
+      .imageExtent      = swapchain_extent,
+      .imageArrayLayers = 1,
+      .imageUsage       = vk::ImageUsageFlagBits::eColorAttachment,
+      .imageSharingMode = vk::SharingMode::eExclusive,
+      .preTransform     = capabilities.currentTransform,
+      .compositeAlpha   = vk::CompositeAlphaFlagBitsKHR::eOpaque,
+      .presentMode      = present_mode,
+      .clipped          = true
+    };
+    swapchain = vk::raii::SwapchainKHR(device, create_info);
+    swapchain_images = swapchain.getImages();
+  }
+
   void init() {
     glfwInit();
 
@@ -245,11 +301,13 @@ private:
     create_surface();
     select_physical_device();
     create_logical_device();
+    create_swapchain();
   }
 
   void cleanup() {
+    swapchain.~SwapchainKHR();
+    surface.~SurfaceKHR();
     glfwDestroyWindow(window);
-
     glfwTerminate();
   }
 };
