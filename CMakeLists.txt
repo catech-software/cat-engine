@@ -1,5 +1,32 @@
-cmake_minimum_required(VERSION 3.25)
+cmake_minimum_required(VERSION 3.25...4.4)
 project(cat-engine CXX)
+
+function(compile_slang_shader MODULE)
+  cmake_path(GET MODULE PARENT_PATH OUT_DIR)
+  add_custom_command(
+    OUTPUT "${OUT_DIR}"
+    COMMAND "${CMAKE_COMMAND}" "-E" "make_directory" "${OUT_DIR}"
+    VERBATIM
+  )
+  list(TRANSFORM ARGN PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
+  add_custom_command(
+    OUTPUT "${MODULE}"
+    COMMAND "${SLANG_EXECUTABLE}" "-target" "spirv" "-profile" "spirv_1_6" "-o" "${MODULE}" ${ARGN}
+    DEPENDS ${ARGN} "${OUT_DIR}"
+    WORKING_DIRECTORY "${OUT_DIR}"
+    VERBATIM
+  )
+endfunction()
+
+function(copy_dlls TARGET)
+  add_custom_command(
+    TARGET "${TARGET}" POST_BUILD
+    #TODO: when 4.4 comes out, change this to copy_if_different
+    COMMAND "${CMAKE_COMMAND}" "-E" "copy" "-t" "$<TARGET_FILE_DIR:${TARGET}>" "$<TARGET_RUNTIME_DLLS:${TARGET}>"
+    COMMAND_EXPAND_LISTS
+    VERBATIM
+  )
+endfunction()
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type" FORCE)
