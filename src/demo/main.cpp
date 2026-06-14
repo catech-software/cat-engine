@@ -15,8 +15,12 @@
 
 #include "demo/log.h"
 
+// this ordering is FUCKED
+
 constexpr int width  = 800;
 constexpr int height = 600;
+
+constexpr int frames_in_flight = 2;
 
 static std::vector<const char *> layers    = {};
 static std::vector<const char *> inst_exts = {};
@@ -49,27 +53,29 @@ public:
 private:
   GLFWwindow* window;
 
-  vk::raii::Context                context;
-  vk::raii::Instance               instance              = nullptr;
-  vk::raii::DebugUtilsMessengerEXT debug_messenger       = nullptr;
-  vk::raii::SurfaceKHR             surface               = nullptr;
-  vk::raii::PhysicalDevice         physical_device       = nullptr;
-  vk::raii::Device                 device                = nullptr;
-  std::uint32_t                    queue_family_index    = std::numeric_limits<std::uint32_t>::max();
-  vk::raii::Queue                  queue                 = nullptr;
-  vk::raii::SwapchainKHR           swapchain             = nullptr;
-  std::vector<vk::Image>           swapchain_images;
-  vk::SurfaceFormatKHR             swapchain_format;
-  vk::Extent2D                     swapchain_extent;
-  std::vector<vk::raii::ImageView> swapchain_image_views;
-  vk::raii::PipelineLayout         pipeline_layout       = nullptr;
-  vk::raii::Pipeline               pipeline              = nullptr;
-  vk::raii::CommandPool            command_pool          = nullptr;
-  vk::raii::CommandBuffer          command_buffer        = nullptr;
+  vk::raii::Context                    context;
+  vk::raii::Instance                   instance              = nullptr;
+  vk::raii::DebugUtilsMessengerEXT     debug_messenger       = nullptr;
+  vk::raii::SurfaceKHR                 surface               = nullptr;
+  vk::raii::PhysicalDevice             physical_device       = nullptr;
+  vk::raii::Device                     device                = nullptr;
+  std::uint32_t                        queue_family_index    = std::numeric_limits<std::uint32_t>::max();
+  vk::raii::Queue                      queue                 = nullptr;
+  vk::raii::SwapchainKHR               swapchain             = nullptr;
+  std::vector<vk::Image>               swapchain_images;
+  vk::SurfaceFormatKHR                 swapchain_format;
+  vk::Extent2D                         swapchain_extent;
+  std::vector<vk::raii::ImageView>     swapchain_image_views;
+  vk::raii::PipelineLayout             pipeline_layout       = nullptr;
+  vk::raii::Pipeline                   pipeline              = nullptr;
+  vk::raii::CommandPool                command_pool          = nullptr;
+  std::vector<vk::raii::CommandBuffer> command_buffers;
 
-  vk::raii::Semaphore present_semaphore = nullptr;
-  vk::raii::Semaphore render_semaphore  = nullptr;
-  vk::raii::Fence     draw_fence        = nullptr;
+  std::vector<vk::raii::Semaphore> present_semaphores;
+  std::vector<vk::raii::Semaphore> render_semaphores;
+  std::vector<vk::raii::Fence>     draw_fences;
+
+  std::uint32_t frame_index = 0;
 
   static VKAPI_ATTR vk::Bool32 VKAPI_CALL debug_callback(vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
                                                          vk::DebugUtilsMessageTypeFlagsEXT type,
@@ -454,15 +460,20 @@ private:
     vk::CommandBufferAllocateInfo alloc_info = {
       .commandPool        = command_pool,
       .level              = vk::CommandBufferLevel::ePrimary,
-      .commandBufferCount = 1
+      .commandBufferCount = frames_in_flight
     };
-    command_buffer = std::move(vk::raii::CommandBuffers(device, alloc_info).front());
+    command_buffers = vk::raii::CommandBuffers(device, alloc_info);
   }
 
   void create_sync_objects() {
-    present_semaphore = vk::raii::Semaphore(device, vk::SemaphoreCreateInfo{});
-    render_semaphore = vk::raii::Semaphore(device, vk::SemaphoreCreateInfo{});
-    draw_fence = vk::raii::Fence(device, { .flags = vk::FenceCreateFlagBits::eSignaled });
+    for (std::size_t i = 0; i < swapchain_images.size(); i++) {
+      render_semaphores.emplace_back(device, vk::SemaphoreCreateInfo{});
+    }
+
+    for (std::size_t i = 0; i < frames_in_flight; i++) {
+      present_semaphores.emplace_back(device, vk::SemaphoreCreateInfo{});
+      draw_fences.emplace_back(device, vk::FenceCreateInfo{ .flags = vk::FenceCreateFlagBits::eSignaled });
+    }
   }
 
   void transition_image_layout(
@@ -496,10 +507,11 @@ private:
       .imageMemoryBarrierCount = 1,
       .pImageMemoryBarriers    = &barrier
     };
-    command_buffer.pipelineBarrier2(dependency_info);
+    command_buffers[frame_index].pipelineBarrier2(dependency_info);
   }
 
   void record_command_buffer(std::uint32_t image_index) {
+    vk::raii::CommandBuffer& command_buffer = command_buffers[frame_index];
     command_buffer.begin({});
 
     transition_image_layout(
@@ -581,24 +593,25 @@ private:
   }
 
   void draw() {
-    vk::Result fence_result = device.waitForFences(*draw_fence, vk::True, std::numeric_limits<std::uint64_t>::max());
+    vk::Result fence_result
+      = device.waitForFences(*draw_fences[frame_index], vk::True, std::numeric_limits<std::uint64_t>::max());
     if (fence_result != vk::Result::eSuccess) throw std::runtime_error("Failed to wait for device to finish drawing");
-    device.resetFences(*draw_fence);
+    device.resetFences(*draw_fences[frame_index]);
 
     auto [image_result, image_index]
-      = swapchain.acquireNextImage(std::numeric_limits<std::uint64_t>::max(), present_semaphore, nullptr);
+      = swapchain.acquireNextImage(std::numeric_limits<std::uint64_t>::max(), present_semaphores[frame_index], nullptr);
+    command_buffers[frame_index].reset();
     record_command_buffer(image_index);
-    queue.waitIdle();
 
     vk::SemaphoreSubmitInfo wait_semaphore_submit_info = {
-      .semaphore = present_semaphore,
+      .semaphore = present_semaphores[frame_index],
       .stageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput
     };
     vk::CommandBufferSubmitInfo command_buffer_submit_info = {
-      .commandBuffer = command_buffer
+      .commandBuffer = command_buffers[frame_index]
     };
     vk::SemaphoreSubmitInfo signal_semaphore_submit_info = {
-      .semaphore = render_semaphore,
+      .semaphore = render_semaphores[image_index],
       .stageMask = vk::PipelineStageFlagBits2::eVertexShader
     };
     vk::SubmitInfo2 submit_info = {
@@ -609,17 +622,19 @@ private:
       .signalSemaphoreInfoCount = 1,
       .pSignalSemaphoreInfos    = &signal_semaphore_submit_info
     };
-    queue.submit2(submit_info, draw_fence);
+    queue.submit2(submit_info, draw_fences[frame_index]);
 
     vk::PresentInfoKHR present_info = {
       .waitSemaphoreCount = 1,
-      .pWaitSemaphores    = &*render_semaphore,
+      .pWaitSemaphores    = &*render_semaphores[image_index],
       .swapchainCount     = 1,
       .pSwapchains        = &*swapchain,
       .pImageIndices      = &image_index
     };
     [[maybe_unused]]
     vk::Result present_result = queue.presentKHR(present_info);
+
+    ++frame_index %= frames_in_flight;
   }
 
   void cleanup() {
