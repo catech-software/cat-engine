@@ -506,7 +506,7 @@ private:
       image_index,
       vk::ImageLayout::eUndefined,
       vk::ImageLayout::eColorAttachmentOptimal,
-      {},
+      vk::AccessFlagBits2::eNone,
       vk::AccessFlagBits2::eColorAttachmentWrite,
       vk::PipelineStageFlagBits2::eColorAttachmentOutput,
       vk::PipelineStageFlagBits2::eColorAttachmentOutput
@@ -552,9 +552,9 @@ private:
       vk::ImageLayout::eColorAttachmentOptimal,
       vk::ImageLayout::ePresentSrcKHR,
       vk::AccessFlagBits2::eColorAttachmentWrite,
-      {},
+      vk::AccessFlagBits2::eNone,
       vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-      vk::PipelineStageFlagBits2::eBottomOfPipe
+      vk::PipelineStageFlagBits2::eNone
     );
 
     command_buffer.end();
@@ -599,8 +599,7 @@ private:
     };
     vk::SemaphoreSubmitInfo signal_semaphore_submit_info = {
       .semaphore = render_semaphore,
-      // TODO: figure out if there is a more appropriate setting for this
-      .stageMask = vk::PipelineStageFlagBits2::eAllGraphics
+      .stageMask = vk::PipelineStageFlagBits2::eVertexShader
     };
     vk::SubmitInfo2 submit_info = {
       .waitSemaphoreInfoCount   = 1,
@@ -619,6 +618,7 @@ private:
       .pSwapchains        = &*swapchain,
       .pImageIndices      = &image_index
     };
+    [[maybe_unused]]
     vk::Result present_result = queue.presentKHR(present_info);
   }
 
