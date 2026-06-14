@@ -9,6 +9,7 @@ target_include_directories(cat-engine-demo PRIVATE
 target_compile_definitions(cat-engine-demo PRIVATE
   "$<$<NOT:$<CONFIG:Debug>>:NDEBUG>"
   "VULKAN_HPP_NO_STRUCT_CONSTRUCTORS"
+  "VULKAN_HPP_HANDLE_ERROR_OUT_OF_DATE_AS_SUCCESS"
   "GLFW_INCLUDE_VULKAN"
 )
 target_compile_options(cat-engine-demo PRIVATE

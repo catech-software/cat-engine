@@ -77,6 +77,8 @@ private:
 
   std::uint32_t frame_index = 0;
 
+  bool framebuffer_resized = false;
+
   static VKAPI_ATTR vk::Bool32 VKAPI_CALL debug_callback(vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
                                                          vk::DebugUtilsMessageTypeFlagsEXT type,
                                                          const vk::DebugUtilsMessengerCallbackDataEXT *data,
@@ -100,6 +102,11 @@ private:
     }
     log(log_severity, std::format("Vulkan validation layers: {} {}", vk::to_string(type), data->pMessage));
     return vk::False;
+  }
+
+  static void framebuffer_resize_callback(GLFWwindow* window, [[maybe_unused]] int width, [[maybe_unused]] int height) {
+    demo *app = reinterpret_cast<demo *>(glfwGetWindowUserPointer(window));
+    app->framebuffer_resized = true;
   }
 
   void create_vulkan_instance() {
@@ -532,7 +539,6 @@ private:
       .storeOp     = vk::AttachmentStoreOp::eStore,
       .clearValue  = clear_color
     };
-
     vk::RenderingInfo rendering_info = {
       .renderArea           = {
         .offset = { 0, 0 },
@@ -572,13 +578,35 @@ private:
     command_buffer.end();
   }
 
+  void cleanup_swapchain() {
+    swapchain_image_views.clear();
+    swapchain = nullptr;
+  }
+
+  void recreate_swapchain() {
+    int width, height;
+    glfwGetFramebufferSize(window, &width, &height);
+    while (width == 0 || height == 0) {
+      glfwWaitEvents();
+      glfwGetFramebufferSize(window, &width, &height);
+    }
+
+    device.waitIdle();
+
+    cleanup_swapchain();
+
+    create_swapchain();
+    create_image_views();
+  }
+
   void init() {
     glfwInit();
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
     window = glfwCreateWindow(width, height, "CAT Engine Demo", nullptr, nullptr);
+    glfwSetWindowUserPointer(window, this);
+    glfwSetFramebufferSizeCallback(window, framebuffer_resize_callback);
 
     create_vulkan_instance();
     create_surface();
@@ -596,10 +624,17 @@ private:
     vk::Result fence_result
       = device.waitForFences(*draw_fences[frame_index], vk::True, std::numeric_limits<std::uint64_t>::max());
     if (fence_result != vk::Result::eSuccess) throw std::runtime_error("Failed to wait for device to finish drawing");
-    device.resetFences(*draw_fences[frame_index]);
 
     auto [image_result, image_index]
       = swapchain.acquireNextImage(std::numeric_limits<std::uint64_t>::max(), present_semaphores[frame_index], nullptr);
+    if (image_result == vk::Result::eErrorOutOfDateKHR) {
+      recreate_swapchain();
+      return;
+    } else if (image_result != vk::Result::eSuccess && image_result != vk::Result::eSuboptimalKHR) {
+      assert(image_result == vk::Result::eTimeout || image_result == vk::Result::eNotReady);
+      throw std::runtime_error("Failed to acquire swapchain image");
+    }
+    device.resetFences(*draw_fences[frame_index]);
     command_buffers[frame_index].reset();
     record_command_buffer(image_index);
 
@@ -631,8 +666,13 @@ private:
       .pSwapchains        = &*swapchain,
       .pImageIndices      = &image_index
     };
-    [[maybe_unused]]
     vk::Result present_result = queue.presentKHR(present_info);
+    if (present_result == vk::Result::eSuboptimalKHR || present_result == vk::Result::eErrorOutOfDateKHR || framebuffer_resized) {
+      framebuffer_resized = false;
+      recreate_swapchain();
+    } else {
+      assert(present_result == vk::Result::eSuccess);
+    }
 
     ++frame_index %= frames_in_flight;
   }
@@ -640,7 +680,7 @@ private:
   void cleanup() {
     device.waitIdle();
 
-    swapchain.~SwapchainKHR();
+    cleanup_swapchain();
     surface.~SurfaceKHR();
     glfwDestroyWindow(window);
     glfwTerminate();

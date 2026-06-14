@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.25...4.4)
+cmake_minimum_required(VERSION 3.26...4.4)
 project(cat-engine CXX)
 
 function(compile_slang_shader MODULE)
@@ -21,7 +21,7 @@ endfunction()
 function(copy_dlls TARGET)
   add_custom_command(
     TARGET "${TARGET}" POST_BUILD
-    #TODO: when 4.4 comes out, change this to copy_if_different
+    #TODO: when 4.4 becomes widely available, change this to copy_if_different
     COMMAND "${CMAKE_COMMAND}" "-E" "copy" "-t" "$<TARGET_FILE_DIR:${TARGET}>" "$<TARGET_RUNTIME_DLLS:${TARGET}>"
     COMMAND_EXPAND_LISTS
     VERBATIM
