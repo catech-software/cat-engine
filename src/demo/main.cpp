@@ -1,7 +1,9 @@
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstdint>
 #include <cstddef>
+#include <cstring>
 #include <exception>
 #include <format>
 #include <limits>
@@ -11,6 +13,7 @@
 #include <vector>
 
 #include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
 #include <vulkan/vulkan_raii.hpp>
 
 #include "demo/log.h"
@@ -39,6 +42,38 @@ static std::array shader = std::to_array<unsigned char>({
 #embed "demo/shaders/default.spv"
 });
 
+struct vertex {
+  glm::vec2 position;
+  glm::vec3 color;
+
+  static vk::VertexInputBindingDescription get_binding_description() {
+    return {
+      .binding   = 0,
+      .stride    = sizeof(vertex),
+      .inputRate = vk::VertexInputRate::eVertex
+    };
+  }
+
+  static std::array<vk::VertexInputAttributeDescription, 2> get_attribute_descriptions() {
+    return std::to_array<vk::VertexInputAttributeDescription>({
+      { .location = 0, .binding = 0, .format = vk::Format::eR32G32Sfloat,    .offset = offsetof(vertex, position) },
+      { .location = 1, .binding = 0, .format = vk::Format::eR32G32B32Sfloat, .offset = offsetof(vertex, color) }
+    });
+  }
+};
+
+static std::array verticies = std::to_array<vertex>({
+  { .position = { -0.5f, -0.5f }, .color = { 0.0f, 0.0f, 0.0f } },
+  { .position = { -0.5f,  0.5f }, .color = { 0.0f, 0.0f, 1.0f } },
+  { .position = {  0.5f,  0.5f }, .color = { 0.0f, 1.0f, 1.0f } },
+  { .position = {  0.5f, -0.5f }, .color = { 0.0f, 1.0f, 0.0f } },
+});
+
+static std::array indices = std::to_array<std::uint16_t>({
+  0, 1, 2,
+  2, 3, 0
+});
+
 class demo {
 public:
   void run() {
@@ -54,21 +89,26 @@ private:
   GLFWwindow* window;
 
   vk::raii::Context                    context;
-  vk::raii::Instance                   instance              = nullptr;
-  vk::raii::DebugUtilsMessengerEXT     debug_messenger       = nullptr;
-  vk::raii::SurfaceKHR                 surface               = nullptr;
-  vk::raii::PhysicalDevice             physical_device       = nullptr;
-  vk::raii::Device                     device                = nullptr;
-  std::uint32_t                        queue_family_index    = std::numeric_limits<std::uint32_t>::max();
-  vk::raii::Queue                      queue                 = nullptr;
-  vk::raii::SwapchainKHR               swapchain             = nullptr;
+  vk::raii::Instance                   instance               = nullptr;
+  vk::raii::DebugUtilsMessengerEXT     debug_messenger        = nullptr;
+  vk::raii::SurfaceKHR                 surface                = nullptr;
+  vk::raii::PhysicalDevice             physical_device        = nullptr;
+  vk::raii::Device                     device                 = nullptr;
+  std::uint32_t                        queue_family_index     = std::numeric_limits<std::uint32_t>::max();
+  vk::raii::Queue                      queue                  = nullptr;
+  vk::raii::SwapchainKHR               swapchain              = nullptr;
   std::vector<vk::Image>               swapchain_images;
   vk::SurfaceFormatKHR                 swapchain_format;
   vk::Extent2D                         swapchain_extent;
   std::vector<vk::raii::ImageView>     swapchain_image_views;
-  vk::raii::PipelineLayout             pipeline_layout       = nullptr;
-  vk::raii::Pipeline                   pipeline              = nullptr;
-  vk::raii::CommandPool                command_pool          = nullptr;
+  vk::raii::PipelineLayout             pipeline_layout        = nullptr;
+  vk::raii::Pipeline                   pipeline               = nullptr;
+  vk::raii::CommandPool                command_pool           = nullptr;
+  vk::raii::CommandPool                transient_command_pool = nullptr;
+  vk::raii::Buffer                     vertex_buffer          = nullptr;
+  vk::raii::DeviceMemory               vertex_buffer_memory   = nullptr;
+  vk::raii::Buffer                     index_buffer           = nullptr;
+  vk::raii::DeviceMemory               index_buffer_memory    = nullptr;
   std::vector<vk::raii::CommandBuffer> command_buffers;
 
   std::vector<vk::raii::Semaphore> present_semaphores;
@@ -372,7 +412,14 @@ private:
       }
     });
 
-    vk::PipelineVertexInputStateCreateInfo vertex_input_state;
+    vk::VertexInputBindingDescription binding_description = vertex::get_binding_description();
+    std::array attribute_descriptions = vertex::get_attribute_descriptions();
+    vk::PipelineVertexInputStateCreateInfo vertex_input_state = {
+      .vertexBindingDescriptionCount   = 1,
+      .pVertexBindingDescriptions      = &binding_description,
+      .vertexAttributeDescriptionCount = attribute_descriptions.size(),
+      .pVertexAttributeDescriptions    = attribute_descriptions.data()
+    };
 
     vk::PipelineInputAssemblyStateCreateInfo input_assembly_state = {
       .topology = vk::PrimitiveTopology::eTriangleList
@@ -455,15 +502,113 @@ private:
     pipeline = vk::raii::Pipeline(device, nullptr, create_info.get<vk::GraphicsPipelineCreateInfo>());
   }
 
-  void create_command_pool() {
+  void create_command_pools() {
     vk::CommandPoolCreateInfo create_info = {
-      .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+      .flags            = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
       .queueFamilyIndex = queue_family_index
     };
     command_pool = vk::raii::CommandPool(device, create_info);
+
+    vk::CommandPoolCreateInfo transient_create_info = {
+      .flags            = vk::CommandPoolCreateFlagBits::eTransient,
+      .queueFamilyIndex = queue_family_index
+    };
+    transient_command_pool = vk::raii::CommandPool(device, transient_create_info);
   }
 
-  void create_command_buffer() {
+  std::uint32_t find_memory_type(std::uint32_t type_filter, vk::MemoryPropertyFlags properties) const {
+    vk::PhysicalDeviceMemoryProperties mem_properties = physical_device.getMemoryProperties();
+    for (std::uint32_t i = 0; i < mem_properties.memoryTypeCount; i++) {
+      if ((type_filter & (1 << i)) && (mem_properties.memoryTypes[i].propertyFlags & properties) == properties)
+        return i;
+    }
+    throw std::runtime_error("Failed to find a suitable memory type");
+  }
+
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> create_buffer(
+    vk::DeviceSize size,
+    vk::BufferUsageFlags usage,
+    vk::MemoryPropertyFlags properties
+  ) const {
+    vk::BufferCreateInfo create_info = {
+      .size        = size,
+      .usage       = usage,
+      .sharingMode = vk::SharingMode::eExclusive
+    };
+    vk::raii::Buffer buffer = vk::raii::Buffer(device, create_info);
+
+    vk::MemoryRequirements mem_requirements = buffer.getMemoryRequirements();
+    vk::MemoryAllocateInfo alloc_info = {
+      .allocationSize  = mem_requirements.size,
+      .memoryTypeIndex = find_memory_type(mem_requirements.memoryTypeBits, properties)
+    };
+    vk::raii::DeviceMemory buffer_memory = vk::raii::DeviceMemory(device, alloc_info);
+    buffer.bindMemory(buffer_memory, 0);
+
+    return { std::move(buffer), std::move(buffer_memory) };
+  };
+
+  void copy_buffer(vk::raii::Buffer& src_buffer, vk::raii::Buffer& dst_buffer, vk::DeviceSize size) const {
+    vk::CommandBufferAllocateInfo alloc_info = {
+      .commandPool        = transient_command_pool,
+      .level              = vk::CommandBufferLevel::ePrimary,
+      .commandBufferCount = 1
+    };
+    vk::raii::CommandBuffer copy_command_buffer = std::move(vk::raii::CommandBuffers(device, alloc_info).front());
+    copy_command_buffer.begin({ .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit });
+    copy_command_buffer.copyBuffer(src_buffer, dst_buffer, { { .srcOffset = 0, .dstOffset = 0, .size = size } });
+    copy_command_buffer.end();
+
+    vk::CommandBufferSubmitInfo command_buffer_info = { .commandBuffer = copy_command_buffer };
+    queue.submit2({ { .commandBufferInfoCount = 1, .pCommandBufferInfos = &command_buffer_info } }, nullptr);
+    queue.waitIdle();
+  }
+
+  void create_vertex_buffer() {
+    vk::DeviceSize buffer_size = sizeof(verticies[0]) * verticies.size();
+
+    auto [ staging_buffer, staging_buffer_memory ] = create_buffer(
+      buffer_size,
+      vk::BufferUsageFlagBits::eTransferSrc,
+      vk::MemoryPropertyFlagBits::eHostVisible
+    | vk::MemoryPropertyFlagBits::eHostCoherent
+    );
+    void *staging_data = staging_buffer_memory.mapMemory(0, buffer_size);
+    std::memcpy(staging_data, verticies.data(), buffer_size);
+    staging_buffer_memory.unmapMemory();
+
+    std::tie(vertex_buffer, vertex_buffer_memory) = create_buffer(
+      buffer_size,
+      vk::BufferUsageFlagBits::eVertexBuffer
+    | vk::BufferUsageFlagBits::eTransferDst,
+      vk::MemoryPropertyFlagBits::eDeviceLocal
+    );
+    copy_buffer(staging_buffer, vertex_buffer, buffer_size);
+  }
+
+  void create_index_buffer() {
+    vk::DeviceSize buffer_size = sizeof(indices[0]) * indices.size();
+
+    auto [ staging_buffer, staging_buffer_memory ] = create_buffer(
+      buffer_size,
+      vk::BufferUsageFlagBits::eTransferSrc,
+      vk::MemoryPropertyFlagBits::eHostVisible
+    | vk::MemoryPropertyFlagBits::eHostCoherent
+    );
+    void *staging_data = staging_buffer_memory.mapMemory(0, buffer_size);
+    std::memcpy(staging_data, indices.data(), buffer_size);
+    staging_buffer_memory.unmapMemory();
+
+    std::tie(index_buffer, index_buffer_memory) = create_buffer(
+      buffer_size,
+      vk::BufferUsageFlagBits::eIndexBuffer
+    | vk::BufferUsageFlagBits::eTransferDst,
+      vk::MemoryPropertyFlagBits::eDeviceLocal
+    );
+    copy_buffer(staging_buffer, index_buffer, buffer_size);
+  }
+
+  void alloc_command_buffers() {
     vk::CommandBufferAllocateInfo alloc_info = {
       .commandPool        = command_pool,
       .level              = vk::CommandBufferLevel::ePrimary,
@@ -562,7 +707,9 @@ private:
       .offset = { 0, 0 },
       .extent = swapchain_extent
     });
-    command_buffer.draw(6, 1, 0, 0);
+    command_buffer.bindVertexBuffers(0, *vertex_buffer, { 0 });
+    command_buffer.bindIndexBuffer(index_buffer, 0, vk::IndexType::eUint16);
+    command_buffer.drawIndexed(indices.size(), 1, 0, 0, 0);
     command_buffer.endRendering();
 
     transition_image_layout(
@@ -615,8 +762,10 @@ private:
     create_swapchain();
     create_image_views();
     create_graphics_pipeline();
-    create_command_pool();
-    create_command_buffer();
+    create_command_pools();
+    create_vertex_buffer();
+    create_index_buffer();
+    alloc_command_buffers();
     create_sync_objects();
   }
 
@@ -625,7 +774,7 @@ private:
       = device.waitForFences(*draw_fences[frame_index], vk::True, std::numeric_limits<std::uint64_t>::max());
     if (fence_result != vk::Result::eSuccess) throw std::runtime_error("Failed to wait for device to finish drawing");
 
-    auto [image_result, image_index]
+    auto [ image_result, image_index ]
       = swapchain.acquireNextImage(std::numeric_limits<std::uint64_t>::max(), present_semaphores[frame_index], nullptr);
     if (image_result == vk::Result::eErrorOutOfDateKHR) {
       recreate_swapchain();
@@ -642,9 +791,7 @@ private:
       .semaphore = present_semaphores[frame_index],
       .stageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput
     };
-    vk::CommandBufferSubmitInfo command_buffer_submit_info = {
-      .commandBuffer = command_buffers[frame_index]
-    };
+    vk::CommandBufferSubmitInfo command_buffer_submit_info = { .commandBuffer = command_buffers[frame_index] };
     vk::SemaphoreSubmitInfo signal_semaphore_submit_info = {
       .semaphore = render_semaphores[image_index],
       .stageMask = vk::PipelineStageFlagBits2::eVertexShader
