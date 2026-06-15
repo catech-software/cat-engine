@@ -1,19 +1,27 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
 #include <exception>
 #include <format>
 #include <limits>
+#include <numbers>
 #include <ranges>
 #include <tuple>
 #include <utility>
 #include <vector>
 
+#define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#define VULKAN_HPP_HANDLE_ERROR_OUT_OF_DATE_AS_SUCCESS
+#define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
 #include <vulkan/vulkan_raii.hpp>
 
 #include "demo/log.h"
@@ -42,8 +50,14 @@ static std::array shader = std::to_array<unsigned char>({
 #embed "demo/shaders/default.spv"
 });
 
+struct uniforms {
+  alignas(16) glm::mat4 model;
+  alignas(16) glm::mat4 view;
+  alignas(16) glm::mat4 projection;
+};
+
 struct vertex {
-  glm::vec2 position;
+  glm::vec3 position;
   glm::vec3 color;
 
   static vk::VertexInputBindingDescription get_binding_description() {
@@ -56,22 +70,48 @@ struct vertex {
 
   static std::array<vk::VertexInputAttributeDescription, 2> get_attribute_descriptions() {
     return std::to_array<vk::VertexInputAttributeDescription>({
-      { .location = 0, .binding = 0, .format = vk::Format::eR32G32Sfloat,    .offset = offsetof(vertex, position) },
+      { .location = 0, .binding = 0, .format = vk::Format::eR32G32B32Sfloat, .offset = offsetof(vertex, position) },
       { .location = 1, .binding = 0, .format = vk::Format::eR32G32B32Sfloat, .offset = offsetof(vertex, color) }
     });
   }
 };
 
 static std::array verticies = std::to_array<vertex>({
-  { .position = { -0.5f, -0.5f }, .color = { 0.0f, 0.0f, 0.0f } },
-  { .position = { -0.5f,  0.5f }, .color = { 0.0f, 0.0f, 1.0f } },
-  { .position = {  0.5f,  0.5f }, .color = { 0.0f, 1.0f, 1.0f } },
-  { .position = {  0.5f, -0.5f }, .color = { 0.0f, 1.0f, 0.0f } },
+  { .position = { -0.5f,  0.5f, -0.5f }, .color = { 0.0f, 0.0f, 0.0f } },
+  { .position = { -0.5f,  0.5f,  0.5f }, .color = { 0.0f, 0.0f, 1.0f } },
+  { .position = {  0.5f,  0.5f,  0.5f }, .color = { 0.0f, 1.0f, 1.0f } },
+  { .position = {  0.5f,  0.5f, -0.5f }, .color = { 0.0f, 1.0f, 0.0f } },
+  { .position = { -0.5f, -0.5f, -0.5f }, .color = { 0.0f, 0.0f, 1.0f } },
+  { .position = { -0.5f, -0.5f,  0.5f }, .color = { 0.0f, 1.0f, 1.0f } },
+  { .position = { -0.5f,  0.5f,  0.5f }, .color = { 0.0f, 1.0f, 0.0f } },
+  { .position = { -0.5f,  0.5f,  0.5f }, .color = { 0.0f, 0.0f, 0.0f } },
+  { .position = { -0.5f, -0.5f,  0.5f }, .color = { 0.0f, 0.0f, 1.0f } },
+  { .position = {  0.5f, -0.5f,  0.5f }, .color = { 0.0f, 1.0f, 1.0f } },
+  { .position = {  0.5f,  0.5f,  0.5f }, .color = { 0.0f, 1.0f, 0.0f } },
+  { .position = {  0.5f,  0.5f,  0.5f }, .color = { 0.0f, 0.0f, 0.0f } },
+  { .position = {  0.5f, -0.5f,  0.5f }, .color = { 0.0f, 0.0f, 1.0f } },
+  { .position = {  0.5f, -0.5f, -0.5f }, .color = { 0.0f, 1.0f, 1.0f } },
+  { .position = {  0.5f,  0.5f, -0.5f }, .color = { 0.0f, 0.0f, 0.0f } },
+  { .position = {  0.5f, -0.5f, -0.5f }, .color = { 0.0f, 0.0f, 1.0f } },
+  { .position = { -0.5f, -0.5f, -0.5f }, .color = { 0.0f, 1.0f, 1.0f } },
+  { .position = { -0.5f,  0.5f, -0.5f }, .color = { 0.0f, 1.0f, 0.0f } },
+  { .position = { -0.5f, -0.5f,  0.5f }, .color = { 0.0f, 0.0f, 0.0f } },
+  { .position = {  0.5f, -0.5f,  0.5f }, .color = { 0.0f, 1.0f, 0.0f } }
 });
 
 static std::array indices = std::to_array<std::uint16_t>({
-  0, 1, 2,
-  2, 3, 0
+   0,  1,  2,
+   2,  3,  0,
+   0,  4,  5,
+   5,  6,  0,
+   7,  8,  9,
+   9, 10,  7,
+  11, 12, 13,
+  13,  3, 11,
+  14, 15, 16,
+  16, 17, 14,
+  18,  4, 13,
+  13, 19, 18
 });
 
 class demo {
@@ -101,6 +141,7 @@ private:
   vk::SurfaceFormatKHR                 swapchain_format;
   vk::Extent2D                         swapchain_extent;
   std::vector<vk::raii::ImageView>     swapchain_image_views;
+  vk::raii::DescriptorSetLayout        descriptor_set_layout  = nullptr;
   vk::raii::PipelineLayout             pipeline_layout        = nullptr;
   vk::raii::Pipeline                   pipeline               = nullptr;
   vk::raii::CommandPool                command_pool           = nullptr;
@@ -109,7 +150,12 @@ private:
   vk::raii::DeviceMemory               vertex_buffer_memory   = nullptr;
   vk::raii::Buffer                     index_buffer           = nullptr;
   vk::raii::DeviceMemory               index_buffer_memory    = nullptr;
-  std::vector<vk::raii::CommandBuffer> command_buffers;
+  std::vector<vk::raii::Buffer>        uniform_buffers;
+  std::vector<vk::raii::DeviceMemory>  uniform_buffers_memory;
+  std::vector<void *>                  uniform_buffers_mapped;
+  vk::raii::DescriptorPool             descriptor_pool        = nullptr;
+  vk::raii::DescriptorSets             descriptor_sets        = nullptr;
+  vk::raii::CommandBuffers             command_buffers        = nullptr;
 
   std::vector<vk::raii::Semaphore> present_semaphores;
   std::vector<vk::raii::Semaphore> render_semaphores;
@@ -118,6 +164,9 @@ private:
   std::uint32_t frame_index = 0;
 
   bool framebuffer_resized = false;
+
+  std::chrono::time_point<std::chrono::steady_clock> last_tick;
+  float rotation = 0.0f;
 
   static VKAPI_ATTR vk::Bool32 VKAPI_CALL debug_callback(vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
                                                          vk::DebugUtilsMessageTypeFlagsEXT type,
@@ -386,6 +435,20 @@ private:
     }
   }
 
+  void create_descriptor_set_layout() {
+    vk::DescriptorSetLayoutBinding ubo_layout_binding = {
+      .binding         = 0,
+      .descriptorType  = vk::DescriptorType::eUniformBuffer,
+      .descriptorCount = 1,
+      .stageFlags      = vk::ShaderStageFlagBits::eVertex
+    };
+    vk::DescriptorSetLayoutCreateInfo layout_create_info = {
+      .bindingCount = 1,
+      .pBindings    = &ubo_layout_binding
+    };
+    descriptor_set_layout = vk::raii::DescriptorSetLayout(device, layout_create_info);
+  }
+
   [[nodiscard]]
   vk::raii::ShaderModule create_shader_module(const std::uint32_t *code, std::size_t size) const {
     vk::ShaderModuleCreateInfo create_info = {
@@ -475,7 +538,8 @@ private:
     };
 
     vk::PipelineLayoutCreateInfo layout_create_info = {
-      .setLayoutCount         = 0,
+      .setLayoutCount         = 1,
+      .pSetLayouts            = &*descriptor_set_layout,
       .pushConstantRangeCount = 0
     };
     pipeline_layout = vk::raii::PipelineLayout(device, layout_create_info);
@@ -608,6 +672,62 @@ private:
     copy_buffer(staging_buffer, index_buffer, buffer_size);
   }
 
+  void create_uniform_buffers() {
+    for (std::size_t i = 0; i < frames_in_flight; i++) {
+      vk::DeviceSize buffer_size = sizeof(uniforms);
+      auto [ buffer, buffer_memory ] = create_buffer(
+        buffer_size,
+        vk::BufferUsageFlagBits::eUniformBuffer,
+        vk::MemoryPropertyFlagBits::eHostVisible
+      | vk::MemoryPropertyFlagBits::eHostCoherent
+      );
+      uniform_buffers.push_back(std::move(buffer));
+      uniform_buffers_memory.push_back(std::move(buffer_memory));
+      uniform_buffers_mapped.push_back(uniform_buffers_memory.back().mapMemory(0, buffer_size));
+    }
+  }
+
+  void create_descriptor_pool() {
+    vk::DescriptorPoolSize pool_size = {
+      .type            = vk::DescriptorType::eUniformBuffer,
+      .descriptorCount = frames_in_flight
+    };
+    vk::DescriptorPoolCreateInfo create_info = {
+      .flags         = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
+      .maxSets       = frames_in_flight,
+      .poolSizeCount = 1,
+      .pPoolSizes    = &pool_size
+    };
+    descriptor_pool = vk::raii::DescriptorPool(device, create_info);
+  }
+
+  void alloc_descriptor_sets() {
+    std::vector<vk::DescriptorSetLayout> layouts = std::vector(frames_in_flight, *descriptor_set_layout);
+    vk::DescriptorSetAllocateInfo alloc_info = {
+      .descriptorPool     = descriptor_pool,
+      .descriptorSetCount = static_cast<std::uint32_t>(layouts.size()),
+      .pSetLayouts        = layouts.data()
+    };
+    descriptor_sets = vk::raii::DescriptorSets(device, alloc_info);
+
+    for (std::size_t i = 0; i < frames_in_flight; i++) {
+      vk::DescriptorBufferInfo buffer_info = {
+        .buffer = uniform_buffers[i],
+        .offset = 0,
+        .range  = sizeof(uniforms)
+      };
+      vk::WriteDescriptorSet descriptor_write = {
+        .dstSet          = descriptor_sets[i],
+        .dstBinding      = 0,
+        .dstArrayElement = 0,
+        .descriptorCount = 1,
+        .descriptorType  = vk::DescriptorType::eUniformBuffer,
+        .pBufferInfo     = &buffer_info
+      };
+      device.updateDescriptorSets({ descriptor_write }, {});
+    }
+  }
+
   void alloc_command_buffers() {
     vk::CommandBufferAllocateInfo alloc_info = {
       .commandPool        = command_pool,
@@ -676,7 +796,7 @@ private:
       vk::PipelineStageFlagBits2::eColorAttachmentOutput
     );
 
-    vk::ClearValue clear_color = vk::ClearColorValue{0.0f, 0.0f, 0.0f, 1.0f};
+    vk::ClearValue clear_color = vk::ClearColorValue{ 0.0f, 0.0f, 0.0f, 1.0f };
     vk::RenderingAttachmentInfo attachment_info = {
       .imageView   = swapchain_image_views[image_index],
       .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
@@ -709,6 +829,7 @@ private:
     });
     command_buffer.bindVertexBuffers(0, *vertex_buffer, { 0 });
     command_buffer.bindIndexBuffer(index_buffer, 0, vk::IndexType::eUint16);
+    command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline_layout, 0, *descriptor_sets[frame_index], nullptr);
     command_buffer.drawIndexed(indices.size(), 1, 0, 0, 0);
     command_buffer.endRendering();
 
@@ -723,6 +844,24 @@ private:
     );
 
     command_buffer.end();
+  }
+
+  void update_uniform_buffer(std::uint32_t current_image) {
+    std::chrono::time_point<std::chrono::steady_clock> current_tick = std::chrono::steady_clock::now();
+    std::chrono::duration<float> delta = current_tick - last_tick;
+    last_tick = current_tick;
+    rotation = std::fmodf(rotation + delta.count() * std::numbers::pi_v<float> / 2.0f, 2.0f * std::numbers::pi_v<float>);
+
+    uniforms ubo;
+    ubo.model = glm::rotate(glm::mat4(1.0f), rotation, { 0.0f, 1.0f, 0.0f }),
+    ubo.view = glm::lookAt(glm::vec3{ 1.0f, 1.0f, 1.0f }, { 0.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }),
+    ubo.projection = glm::perspective(
+      glm::radians(90.0f),
+      swapchain_extent.width / static_cast<float>(swapchain_extent.height),
+      0.1f, 100.0f
+    );
+    ubo.projection[1][1] *= -1; // vulkan has the y-axis point down
+    memcpy(uniform_buffers_mapped[current_image], &ubo, sizeof(ubo));
   }
 
   void cleanup_swapchain() {
@@ -761,12 +900,18 @@ private:
     create_logical_device();
     create_swapchain();
     create_image_views();
+    create_descriptor_set_layout();
     create_graphics_pipeline();
     create_command_pools();
     create_vertex_buffer();
     create_index_buffer();
+    create_uniform_buffers();
+    create_descriptor_pool();
+    alloc_descriptor_sets();
     alloc_command_buffers();
     create_sync_objects();
+
+    last_tick = std::chrono::steady_clock::now();
   }
 
   void draw() {
@@ -786,6 +931,8 @@ private:
     device.resetFences(*draw_fences[frame_index]);
     command_buffers[frame_index].reset();
     record_command_buffer(image_index);
+
+    update_uniform_buffer(frame_index);
 
     vk::SemaphoreSubmitInfo wait_semaphore_submit_info = {
       .semaphore = present_semaphores[frame_index],

@@ -6,12 +6,7 @@ target_include_directories(cat-engine-demo PRIVATE
   "${PROJECT_BINARY_DIR}/generated/include"
   "${PROJECT_SOURCE_DIR}/include"
 )
-target_compile_definitions(cat-engine-demo PRIVATE
-  "$<$<NOT:$<CONFIG:Debug>>:NDEBUG>"
-  "VULKAN_HPP_NO_STRUCT_CONSTRUCTORS"
-  "VULKAN_HPP_HANDLE_ERROR_OUT_OF_DATE_AS_SUCCESS"
-  "GLFW_INCLUDE_VULKAN"
-)
+target_compile_definitions(cat-engine-demo PRIVATE "$<$<NOT:$<CONFIG:Debug>>:NDEBUG>")
 target_compile_options(cat-engine-demo PRIVATE
   "--embed-dir=${PROJECT_BINARY_DIR}/generated/src"
   "--embed-dir=${PROJECT_SOURCE_DIR}/src"
