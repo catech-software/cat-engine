@@ -78,40 +78,28 @@ struct vertex {
 
 static std::array verticies = std::to_array<vertex>({
   { .position = { -0.5f,  0.5f, -0.5f }, .color = { 0.0f, 0.0f, 0.0f } },
-  { .position = { -0.5f,  0.5f,  0.5f }, .color = { 0.0f, 0.0f, 1.0f } },
-  { .position = {  0.5f,  0.5f,  0.5f }, .color = { 0.0f, 1.0f, 1.0f } },
-  { .position = {  0.5f,  0.5f, -0.5f }, .color = { 0.0f, 1.0f, 0.0f } },
-  { .position = { -0.5f, -0.5f, -0.5f }, .color = { 0.0f, 0.0f, 1.0f } },
-  { .position = { -0.5f, -0.5f,  0.5f }, .color = { 0.0f, 1.0f, 1.0f } },
   { .position = { -0.5f,  0.5f,  0.5f }, .color = { 0.0f, 1.0f, 0.0f } },
-  { .position = { -0.5f,  0.5f,  0.5f }, .color = { 0.0f, 0.0f, 0.0f } },
-  { .position = { -0.5f, -0.5f,  0.5f }, .color = { 0.0f, 0.0f, 1.0f } },
-  { .position = {  0.5f, -0.5f,  0.5f }, .color = { 0.0f, 1.0f, 1.0f } },
-  { .position = {  0.5f,  0.5f,  0.5f }, .color = { 0.0f, 1.0f, 0.0f } },
-  { .position = {  0.5f,  0.5f,  0.5f }, .color = { 0.0f, 0.0f, 0.0f } },
-  { .position = {  0.5f, -0.5f,  0.5f }, .color = { 0.0f, 0.0f, 1.0f } },
-  { .position = {  0.5f, -0.5f, -0.5f }, .color = { 0.0f, 1.0f, 1.0f } },
-  { .position = {  0.5f,  0.5f, -0.5f }, .color = { 0.0f, 0.0f, 0.0f } },
-  { .position = {  0.5f, -0.5f, -0.5f }, .color = { 0.0f, 0.0f, 1.0f } },
-  { .position = { -0.5f, -0.5f, -0.5f }, .color = { 0.0f, 1.0f, 1.0f } },
-  { .position = { -0.5f,  0.5f, -0.5f }, .color = { 0.0f, 1.0f, 0.0f } },
-  { .position = { -0.5f, -0.5f,  0.5f }, .color = { 0.0f, 0.0f, 0.0f } },
-  { .position = {  0.5f, -0.5f,  0.5f }, .color = { 0.0f, 1.0f, 0.0f } }
+  { .position = {  0.5f,  0.5f,  0.5f }, .color = { 1.0f, 1.0f, 0.0f } },
+  { .position = {  0.5f,  0.5f, -0.5f }, .color = { 1.0f, 0.0f, 0.0f } },
+  { .position = { -0.5f, -0.5f,  0.5f }, .color = { 0.0f, 1.0f, 1.0f } },
+  { .position = { -0.5f, -0.5f, -0.5f }, .color = { 0.0f, 0.0f, 1.0f } },
+  { .position = {  0.5f, -0.5f, -0.5f }, .color = { 1.0f, 0.0f, 1.0f } },
+  { .position = {  0.5f, -0.5f,  0.5f }, .color = { 1.0f, 1.0f, 1.0f } }
 });
 
 static std::array indices = std::to_array<std::uint16_t>({
-   0,  1,  2,
-   2,  3,  0,
-   0,  4,  5,
-   5,  6,  0,
-   7,  8,  9,
-   9, 10,  7,
-  11, 12, 13,
-  13,  3, 11,
-  14, 15, 16,
-  16, 17, 14,
-  18,  4, 13,
-  13, 19, 18
+  0, 1, 2,
+  2, 3, 0,
+  0, 5, 4,
+  4, 1, 0,
+  1, 4, 7,
+  7, 2, 1,
+  2, 7, 6,
+  6, 3, 2,
+  3, 6, 5,
+  5, 0, 3,
+  4, 5, 6,
+  6, 7, 4
 });
 
 class demo {
@@ -370,7 +358,8 @@ private:
     std::vector<vk::SurfaceFormatKHR> formats = physical_device.getSurfaceFormatsKHR(*surface);
     assert(!formats.empty() && "No surface formats supported");
     decltype(formats)::iterator preferred_format = std::ranges::find_if(formats, [](const vk::SurfaceFormatKHR& format) -> bool {
-      return format.format == vk::Format::eB8G8R8A8Srgb && format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear;
+      return (format.format == vk::Format::eR8G8B8A8Srgb || format.format == vk::Format::eB8G8R8A8Srgb)
+          && format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear;
     });
     swapchain_format = preferred_format != formats.end() ? *preferred_format : formats[0];
 
